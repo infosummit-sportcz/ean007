@@ -255,7 +255,6 @@ async function startScanner(){
   el.scanner.hidden = false;
   el.scannerTorch.hidden = true; el.scannerSwitch.hidden = true;
   el.scannerMsg.textContent = 'Spouštím kameru…';
-  el.scannerLast.textContent = '';
   try{
     if(!window.Html5Qrcode) throw new Error('Knihovna pro skenování se nenačetla. Zkontrolujte připojení k internetu.');
     if(!scanCameras.length){ try{ scanCameras = await Html5Qrcode.getCameras()||[]; }catch(e){ scanCameras = []; } }
