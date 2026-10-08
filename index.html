@@ -78,7 +78,12 @@ li.row button.del:active{background:var(--line-soft)}
 .scanner-view{flex:1;min-height:0;position:relative;overflow:hidden}
 .scanner-view video{width:100%;height:100%;object-fit:cover}
 .scanner-msg{margin:0;padding:14px 16px calc(env(safe-area-inset-bottom,0px) + 22px);text-align:center;color:#EAF2F6;font-size:.98rem;min-height:1.4em}
-.scanner-lastcode{margin:0;padding:0 16px 10px;text-align:center;color:#8FE3A6;font-weight:700;font-size:.95rem;min-height:1.3em}
+.scan-confirm{padding:16px 16px calc(env(safe-area-inset-bottom,0px) + 16px);background:#12222A;border-top:1px solid rgba(234,242,246,.15)}
+.scan-confirm[hidden]{display:none}
+.scan-confirm-code{margin:0 0 12px;text-align:center;color:#EAF2F6;font-size:1.3rem;font-weight:800;letter-spacing:.02em;word-break:break-all}
+.scan-confirm-actions{display:flex;gap:10px}
+.scan-confirm-actions .btn{flex:1;padding:13px 10px;border-radius:11px;font-family:inherit;font-weight:700;font-size:.98rem;cursor:pointer;border:none}
+.btn-ghost-dark{background:transparent;color:#EAF2F6;border:1.5px solid rgba(234,242,246,.35) !important}
 </style>
 </head>
 <body>
@@ -126,7 +131,13 @@ li.row button.del:active{background:var(--line-soft)}
     </div>
   </div>
   <div class="scanner-view" id="scannerView"></div>
-  <p class="scanner-lastcode" id="scannerLast"></p>
+  <div class="scan-confirm" id="scanConfirm" hidden>
+    <p class="scan-confirm-code" id="scanConfirmCode"></p>
+    <div class="scan-confirm-actions">
+      <button type="button" class="btn btn-ghost-dark" id="scanConfirmCancel">Znovu</button>
+      <button type="button" class="btn btn-primary" id="scanConfirmOk">OK, přidat</button>
+    </div>
+  </div>
   <p class="scanner-msg" id="scannerMsg"></p>
 </div>
 
@@ -136,8 +147,9 @@ const $ = id => document.getElementById(id);
 const el = {
   rows:$('rows'), empty:$('empty'), countNum:$('countNum'), countLabel:$('countLabel'), notice:$('notice'),
   clearBtn:$('clearBtn'), exportBtn:$('exportBtn'), scanBtn:$('scanBtn'),
-  scanner:$('scanner'), scannerView:$('scannerView'), scannerMsg:$('scannerMsg'), scannerLast:$('scannerLast'),
-  scannerClose:$('scannerClose'), scannerSwitch:$('scannerSwitch'), scannerTorch:$('scannerTorch')
+  scanner:$('scanner'), scannerView:$('scannerView'), scannerMsg:$('scannerMsg'),
+  scannerClose:$('scannerClose'), scannerSwitch:$('scannerSwitch'), scannerTorch:$('scannerTorch'),
+  scanConfirm:$('scanConfirm'), scanConfirmCode:$('scanConfirmCode'), scanConfirmOk:$('scanConfirmOk'), scanConfirmCancel:$('scanConfirmCancel')
 };
 const LS_KEY = 'ean-scanner-codes-v1';
 
@@ -183,17 +195,37 @@ el.clearBtn.addEventListener('click',()=>{
   codes = []; save(); render(); showNotice('',false);
 });
 
-el.exportBtn.addEventListener('click',()=>{
+const SEQ_KEY = 'ean-scanner-export-seq-v1';
+function nextExportName(){
+  let n = 0;
+  try{ n = parseInt(localStorage.getItem(SEQ_KEY)||'0',10)||0; }catch(e){}
+  n += 1;
+  try{ localStorage.setItem(SEQ_KEY,String(n)); }catch(e){}
+  return 'EANy '+String(n).padStart(4,'0')+'.xlsx';
+}
+el.exportBtn.addEventListener('click',async ()=>{
   if(!codes.length) return;
+  let fname = '';
   try{
     const data = [['EAN']].concat(codes.map(c=>[c]));
     const ws = XLSX.utils.aoa_to_sheet(data);
     ws['!cols'] = [{wch:18}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'EAN kódy');
-    const d = new Date();
-    const pad = n=>String(n).padStart(2,'0');
-    const fname = 'EAN_'+d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'_'+pad(d.getHours())+pad(d.getMinutes())+'.xlsx';
+    fname = nextExportName();
+    const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const buf = XLSX.write(wb,{bookType:'xlsx',type:'array'});
+    const file = new File([buf],fname,{type:mime});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      try{
+        await navigator.share({files:[file],title:fname});
+        showNotice('Soubor "'+fname+'" byl odeslán ke sdílení.',false);
+        return;
+      }catch(shareErr){
+        if(shareErr && shareErr.name==='AbortError') return; // uživatel sdílení zrušil
+        // jinak pokračovat na stažení souboru níže
+      }
+    }
     XLSX.writeFile(wb,fname);
     showNotice('Excel soubor "'+fname+'" byl stažen.',false);
   }catch(err){
@@ -203,7 +235,7 @@ el.exportBtn.addEventListener('click',()=>{
 
 /* ---------- skenování čárového kódu ---------- */
 const SCAN_FORMATS = [9,10,14,15,5,3,8]; // EAN_13, EAN_8, UPC_A, UPC_E, CODE_128, CODE_39, ITF
-let scanner = null, scanCameras = [], scanCamIdx = 0, scanTorchOn = false, scanStarting = false, lastCode = '', lastCodeAt = 0;
+let scanner = null, scanCameras = [], scanCamIdx = 0, scanTorchOn = false, scanStarting = false;
 const hasCameraApi = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 function qrboxFn(vw,vh){
   const w = Math.round(Math.min(vw*0.66, Math.max(vh,vw)*0.7));
@@ -248,23 +280,38 @@ async function startScanner(){
 async function stopScanner(){
   el.scanner.hidden = true;
   scanTorchOn = false; el.scannerTorch.setAttribute('aria-pressed','false');
+  el.scanConfirm.hidden = true; pendingCode = null;
   if(scanner){
     try{ if(scanner.isScanning) await scanner.stop(); }catch(e){}
     try{ scanner.clear(); }catch(e){}
   }
 }
+let pendingCode = null;
 function onScanSuccess(text){
   const code = String(text||'').trim();
-  if(!code) return;
-  const now = Date.now();
-  // ochrana proti opakovanému načtení stejného kódu z po sobě jdoucích snímků
-  if(code===lastCode && (now-lastCodeAt)<1500) return;
-  lastCode = code; lastCodeAt = now;
-  codes.push(code);
-  save(); render();
-  el.scannerLast.textContent = 'Přidáno: '+code;
+  if(!code || pendingCode) return;
+  pendingCode = code;
+  try{ if(scanner && scanner.isScanning) scanner.pause(true); }catch(e){}
+  el.scanConfirmCode.textContent = code;
+  el.scanConfirm.hidden = false;
+  el.scannerMsg.textContent = 'Potvrďte přidání kódu';
   if(navigator.vibrate) try{ navigator.vibrate(60); }catch(e){}
 }
+function resumeAfterConfirm(){
+  el.scanConfirm.hidden = true;
+  pendingCode = null;
+  try{ if(scanner) scanner.resume(); }catch(e){}
+  el.scannerMsg.textContent = 'Namiřte kameru na čárový kód (cca 10–15 cm od kódu, zarovnejte rovně)';
+}
+el.scanConfirmOk.addEventListener('click',()=>{
+  if(!pendingCode) return;
+  codes.push(pendingCode);
+  save(); render();
+  resumeAfterConfirm();
+});
+el.scanConfirmCancel.addEventListener('click',()=>{
+  resumeAfterConfirm();
+});
 el.scanBtn.addEventListener('click',startScanner);
 el.scannerClose.addEventListener('click',stopScanner);
 document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !el.scanner.hidden) stopScanner(); });
