@@ -328,6 +328,14 @@ async function startScanner(){
     el.scannerSwitch.hidden = scanCameras.length<2;
     try{ const caps = scanner.getRunningTrackCapabilities(); el.scannerTorch.hidden = !(caps && caps.torch); }
     catch(e){ el.scannerTorch.hidden = true; }
+    // DOČASNÁ DIAGNOSTIKA – zjišťujeme, proč je u uživatele obraz černý.
+    setTimeout(()=>{
+      try{
+        const v = el.scannerView.querySelector('video');
+        const diag = v ? ('vw='+v.videoWidth+' vh='+v.videoHeight+' rs='+v.readyState+' paused='+v.paused+' muted='+v.muted) : 'video element nenalezen';
+        el.scannerMsg.textContent += ' [diag: '+diag+']';
+      }catch(e){ el.scannerMsg.textContent += ' [diag selhala: '+(e&&e.message)+']'; }
+    },1200);
   }catch(err){
     el.scannerMsg.textContent = scanErrorMsg(err);
     // Když spuštění selže, instance skeneru může zůstat v nekonzistentním
