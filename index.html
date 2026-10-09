@@ -267,9 +267,9 @@ const SCAN_FORMATS = [9,10,14,15,5,3,8]; // EAN_13, EAN_8, UPC_A, UPC_E, CODE_12
 let scanner = null, scanCameras = [], scanCamIdx = 0, scanTorchOn = false, scanStarting = false;
 const hasCameraApi = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 function qrboxFn(vw,vh){
-  const w = Math.round(Math.min(vw*0.66, Math.max(vh,vw)*0.7));
-  const h = Math.max(56,Math.round(Math.min(vh*0.16, w*0.24)));
-  return {width:Math.max(180,w),height:h};
+  const w = Math.round(Math.min(vw*0.8, Math.max(vh,vw)*0.85));
+  const h = Math.max(70,Math.round(Math.min(vh*0.22, w*0.3)));
+  return {width:Math.max(220,w),height:h};
 }
 function scanErrorMsg(err){
   const s = String((err && (err.message||err))||'');
@@ -287,7 +287,9 @@ async function startScanner(){
   try{
     if(!window.Html5Qrcode) throw new Error('Knihovna pro skenování se nenačetla. Zkontrolujte připojení k internetu.');
     if(!scanCameras.length){ try{ scanCameras = await Html5Qrcode.getCameras()||[]; }catch(e){ scanCameras = []; } }
-    if(!scanner) scanner = new Html5Qrcode('scannerView',{formatsToSupport:SCAN_FORMATS,verbose:false,experimentalFeatures:{useBarCodeDetectorIfSupported:true}});
+    // Nativní prohlížečový BarcodeDetector bývá na 1D kódech (EAN/UPC) na mobilech
+    // nespolehlivý – necháváme vždy ZXing dekodér vestavěný v knihovně.
+    if(!scanner) scanner = new Html5Qrcode('scannerView',{formatsToSupport:SCAN_FORMATS,verbose:false,experimentalFeatures:{useBarCodeDetectorIfSupported:false}});
     const target = scanCameras.length ? {deviceId:{exact:scanCameras[scanCamIdx % scanCameras.length].id}} : {facingMode:'environment'};
     const videoConstraints = Object.assign({width:{ideal:1920},height:{ideal:1080},advanced:[{focusMode:'continuous'}]},target);
     try{
