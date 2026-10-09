@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
 <style>
 :root{
   color-scheme: light;
@@ -59,6 +60,13 @@ li.row button.del:active{background:var(--line-soft)}
 .btn-ghost{background:transparent;color:var(--ink-soft);border:1px solid var(--line)}
 .btn:disabled{opacity:.45}
 .btn svg{width:19px;height:19px;flex:none}
+.manual-overlay{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:20px}
+.manual-overlay[hidden]{display:none}
+.manual-card{background:var(--panel);border-radius:14px;padding:20px;width:100%;max-width:360px;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.manual-title{margin:0 0 12px;font-weight:800;font-size:1.05rem;color:var(--ink)}
+.manual-input{width:100%;box-sizing:border-box;padding:13px 14px;border-radius:10px;border:1.5px solid var(--line);background:var(--bg);color:var(--ink);font-family:inherit;font-size:1.05rem;margin-bottom:14px}
+.manual-actions{display:flex;gap:10px}
+.manual-actions .btn{flex:1}
 .notice{margin:0 0 12px;padding:10px 12px;border-radius:9px;background:var(--qty,var(--line-soft));color:var(--ink);font-size:.9rem}
 .notice[hidden]{display:none}
 .notice.error{background:#FBE7E5;color:#7A271A}
@@ -80,7 +88,11 @@ li.row button.del:active{background:var(--line-soft)}
 .scanner-msg{margin:0;padding:14px 16px calc(env(safe-area-inset-bottom,0px) + 22px);text-align:center;color:#EAF2F6;font-size:.98rem;min-height:1.4em}
 .scan-confirm{padding:16px 16px calc(env(safe-area-inset-bottom,0px) + 16px);background:#12222A;border-top:1px solid rgba(234,242,246,.15)}
 .scan-confirm[hidden]{display:none}
-.scan-confirm-code{margin:0 0 12px;text-align:center;color:#EAF2F6;font-size:1.3rem;font-weight:800;letter-spacing:.02em;word-break:break-all}
+.scan-confirm-code{margin:0 0 6px;text-align:center;color:#EAF2F6;font-size:1.3rem;font-weight:800;letter-spacing:.02em;word-break:break-all}
+.scan-confirm-ocr{margin:0 0 12px;text-align:center;font-size:.85rem;font-weight:700;color:#9DB2BD}
+.scan-confirm-ocr[hidden]{display:none}
+.scan-confirm-ocr.ok{color:#7FE08B}
+.scan-confirm-ocr.warn{color:#FF8A80}
 .scan-confirm-actions{display:flex;gap:10px}
 .scan-confirm-actions .btn{flex:1;padding:13px 10px;border-radius:11px;font-family:inherit;font-weight:700;font-size:.98rem;cursor:pointer;border:none}
 .btn-ghost-dark{background:transparent;color:#EAF2F6;border:1.5px solid rgba(234,242,246,.35) !important}
@@ -105,6 +117,10 @@ li.row button.del:active{background:var(--line-soft)}
 
 <div class="toolbar">
   <button type="button" class="btn btn-ghost" id="clearBtn">Vymazat</button>
+  <button type="button" class="btn btn-ghost" id="manualBtn">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+    Ručně
+  </button>
   <button type="button" class="btn btn-secondary" id="exportBtn">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
     Excel
@@ -133,12 +149,24 @@ li.row button.del:active{background:var(--line-soft)}
   <div class="scanner-view" id="scannerView"></div>
   <div class="scan-confirm" id="scanConfirm" hidden>
     <p class="scan-confirm-code" id="scanConfirmCode"></p>
+    <p class="scan-confirm-ocr" id="scanConfirmOcr" hidden></p>
     <div class="scan-confirm-actions">
       <button type="button" class="btn btn-ghost-dark" id="scanConfirmCancel">Znovu</button>
       <button type="button" class="btn btn-primary" id="scanConfirmOk">OK, přidat</button>
     </div>
   </div>
   <p class="scanner-msg" id="scannerMsg"></p>
+</div>
+
+<div class="manual-overlay" id="manualOverlay" role="dialog" aria-modal="true" aria-label="Zadat kód ručně" hidden>
+  <div class="manual-card">
+    <p class="manual-title">Zadat EAN kód ručně</p>
+    <input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" class="manual-input" id="manualInput" placeholder="např. 8719552123984">
+    <div class="manual-actions">
+      <button type="button" class="btn btn-ghost" id="manualCancel">Zrušit</button>
+      <button type="button" class="btn btn-primary" id="manualAdd">Přidat</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -149,7 +177,8 @@ const el = {
   clearBtn:$('clearBtn'), exportBtn:$('exportBtn'), scanBtn:$('scanBtn'),
   scanner:$('scanner'), scannerView:$('scannerView'), scannerMsg:$('scannerMsg'),
   scannerClose:$('scannerClose'), scannerSwitch:$('scannerSwitch'), scannerTorch:$('scannerTorch'),
-  scanConfirm:$('scanConfirm'), scanConfirmCode:$('scanConfirmCode'), scanConfirmOk:$('scanConfirmOk'), scanConfirmCancel:$('scanConfirmCancel')
+  scanConfirm:$('scanConfirm'), scanConfirmCode:$('scanConfirmCode'), scanConfirmOcr:$('scanConfirmOcr'), scanConfirmOk:$('scanConfirmOk'), scanConfirmCancel:$('scanConfirmCancel'),
+  manualBtn:$('manualBtn'), manualOverlay:$('manualOverlay'), manualInput:$('manualInput'), manualAdd:$('manualAdd'), manualCancel:$('manualCancel')
 };
 const LS_KEY = 'ean-scanner-codes-v1';
 
@@ -280,6 +309,7 @@ async function stopScanner(){
   el.scanner.hidden = true;
   scanTorchOn = false; el.scannerTorch.setAttribute('aria-pressed','false');
   el.scanConfirm.hidden = true; pendingCode = null;
+  setOcrStatus('','');
   if(scanner){
     try{ if(scanner.isScanning) await scanner.stop(); }catch(e){}
     try{ scanner.clear(); }catch(e){}
@@ -292,15 +322,65 @@ function onScanSuccess(text){
   pendingCode = code;
   try{ if(scanner && scanner.isScanning) scanner.pause(true); }catch(e){}
   el.scanConfirmCode.textContent = code;
+  setOcrStatus('','Ověřuji číslice pod kódem…');
   el.scanConfirm.hidden = false;
   el.scannerMsg.textContent = 'Potvrďte přidání kódu';
   if(navigator.vibrate) try{ navigator.vibrate(60); }catch(e){}
+  runOcrCheck(code);
 }
 function resumeAfterConfirm(){
   el.scanConfirm.hidden = true;
   pendingCode = null;
+  setOcrStatus('','');
   try{ if(scanner) scanner.resume(); }catch(e){}
   el.scannerMsg.textContent = 'Namiřte kameru na čárový kód (cca 10–15 cm od kódu, zarovnejte rovně)';
+}
+
+/* ---------- OCR kontrola číslic pod čárovým kódem ---------- */
+function setOcrStatus(kind,msg){
+  if(!msg){ el.scanConfirmOcr.hidden = true; el.scanConfirmOcr.textContent = ''; return; }
+  el.scanConfirmOcr.hidden = false;
+  el.scanConfirmOcr.textContent = msg;
+  el.scanConfirmOcr.className = 'scan-confirm-ocr'+(kind?(' '+kind):'');
+}
+let ocrWorker = null, ocrWorkerPromise = null;
+function getOcrWorker(){
+  if(ocrWorkerPromise) return ocrWorkerPromise;
+  ocrWorkerPromise = (async ()=>{
+    const w = await Tesseract.createWorker('eng');
+    await w.setParameters({tessedit_char_whitelist:'0123456789'});
+    ocrWorker = w;
+    return w;
+  })();
+  return ocrWorkerPromise;
+}
+async function ocrDigitsFromVideo(){
+  const video = el.scannerView.querySelector('video');
+  if(!video || !video.videoWidth) return null;
+  const canvas = document.createElement('canvas');
+  const scale = Math.min(1, 1000/video.videoWidth);
+  canvas.width = Math.max(1,Math.round(video.videoWidth*scale));
+  canvas.height = Math.max(1,Math.round(video.videoHeight*scale));
+  canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);
+  const worker = await getOcrWorker();
+  const { data } = await worker.recognize(canvas);
+  return (data && data.text || '').replace(/\D+/g,'');
+}
+async function runOcrCheck(code){
+  if(!window.Tesseract){ setOcrStatus('','Automatické čtení číslic není v tomto prohlížeči dostupné.'); return; }
+  try{
+    const digits = await ocrDigitsFromVideo();
+    if(pendingCode !== code) return; // mezitím zrušeno/potvrzeno jinak
+    if(!digits || digits.length<6){
+      setOcrStatus('','Číslice pod kódem se nepodařilo přečíst.');
+    }else if(digits.includes(code)){
+      setOcrStatus('ok','Číslice pod kódem souhlasí ✓');
+    }else{
+      setOcrStatus('warn','Pozor: číslice pod kódem („'+digits+'“) kódu neodpovídají!');
+    }
+  }catch(e){
+    if(pendingCode === code) setOcrStatus('','Číslice pod kódem se nepodařilo přečíst.');
+  }
 }
 el.scanConfirmOk.addEventListener('click',()=>{
   if(!pendingCode) return;
@@ -327,6 +407,28 @@ el.scannerTorch.addEventListener('click',async ()=>{
   catch(e){}
 });
 window.addEventListener('load',()=>{ if(!hasCameraApi()) el.scanBtn.disabled = true; });
+
+/* ---------- ruční zadání kódu ---------- */
+function openManual(){
+  el.manualInput.value = '';
+  el.manualOverlay.hidden = false;
+  setTimeout(()=>el.manualInput.focus(),50);
+}
+function closeManual(){ el.manualOverlay.hidden = true; }
+function submitManual(){
+  const code = el.manualInput.value.trim();
+  if(!code) return;
+  codes.push(code);
+  save(); render();
+  closeManual();
+  showNotice('Kód „'+code+'“ byl přidán.',false);
+}
+el.manualBtn.addEventListener('click',openManual);
+el.manualCancel.addEventListener('click',closeManual);
+el.manualAdd.addEventListener('click',submitManual);
+el.manualOverlay.addEventListener('click',e=>{ if(e.target===el.manualOverlay) closeManual(); });
+el.manualInput.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); submitManual(); } });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !el.manualOverlay.hidden) closeManual(); });
 </script>
 </body>
 </html>
