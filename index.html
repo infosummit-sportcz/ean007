@@ -309,7 +309,10 @@ async function startScanner(){
   try{
     if(!window.ZXingBrowser) throw new Error('Knihovna pro skenování se nenačetla. Zkontrolujte připojení k internetu.');
     if(!zxingReader){
-      zxingReader = new ZXingBrowser.BrowserMultiFormatReader(null,{delayBetweenScanAttempts:120,delayBetweenScanSuccess:400,tryPlayVideoTimeout:8000});
+      // Pozor: první argument NESMÍ být "null" – knihovna ho použije jako
+      // Map() pro hints a "null.set(...)" by hned spadlo. "undefined" (tj.
+      // argument vynechaný) si knihovna uvnitř sama nahradí prázdnou Map().
+      zxingReader = new ZXingBrowser.BrowserMultiFormatReader(undefined,{delayBetweenScanAttempts:120,delayBetweenScanSuccess:400,tryPlayVideoTimeout:8000});
       // Jen formáty skutečně používané na EAN/UPC visačkách zboží – čím víc
       // formátů zároveň, tím vyšší riziko, že dekodér špatně přečte stejné
       // čáry jiným formátem a vrátí nesmyslný výsledek.
@@ -325,7 +328,7 @@ async function startScanner(){
     // tlačítko přepínání a seřadíme scanCamIdx podle té, která je skutečně aktivní.
     if(!scanCameras.length){
       try{
-        scanCameras = await zxingReader.listVideoInputDevices()||[];
+        scanCameras = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices()||[];
         if(scanCameras.length){
           let curId = '';
           try{ curId = (zxingControls.streamVideoSettingsGet(()=>true)||{}).deviceId||''; }catch(e){}
@@ -339,7 +342,10 @@ async function startScanner(){
     el.scannerSwitch.hidden = scanCameras.length<2;
     el.scannerTorch.hidden = !zxingControls.switchTorch;
   }catch(err){
-    el.scannerMsg.textContent = scanErrorMsg(err);
+    // DOČASNÁ DIAGNOSTIKA – dokud ladíme, přidáme za hlášku i skutečnou
+    // technickou chybu z prohlížeče/knihovny.
+    const rawErr = String((err && (err.name?err.name+': ':'')+(err.message||err))||err);
+    el.scannerMsg.textContent = scanErrorMsg(err)+' ['+rawErr+']';
     try{ if(zxingControls) zxingControls.stop(); }catch(e){}
     zxingControls = null;
     scanCameras = []; scanCamIdx = 0;
