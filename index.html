@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
 <style>
 :root{
@@ -155,7 +155,7 @@ li.row button.del:active{background:var(--line-soft)}
     </div>
   </div>
   <div class="scanner-stage">
-    <div class="scanner-view" id="scannerView"></div>
+    <div class="scanner-view" id="scannerView"><video id="scannerVideo" playsinline muted></video></div>
     <div class="scan-guide" aria-hidden="true"><div class="scan-guide-box"><i></i><i></i><i></i><i></i></div></div>
   </div>
   <div class="scan-confirm" id="scanConfirm" hidden>
@@ -186,7 +186,7 @@ const $ = id => document.getElementById(id);
 const el = {
   rows:$('rows'), empty:$('empty'), countNum:$('countNum'), countLabel:$('countLabel'), notice:$('notice'),
   clearBtn:$('clearBtn'), exportBtn:$('exportBtn'), scanBtn:$('scanBtn'),
-  scanner:$('scanner'), scannerView:$('scannerView'), scannerMsg:$('scannerMsg'),
+  scanner:$('scanner'), scannerView:$('scannerView'), scannerVideo:$('scannerVideo'), scannerMsg:$('scannerMsg'),
   scannerClose:$('scannerClose'), scannerSwitch:$('scannerSwitch'), scannerTorch:$('scannerTorch'),
   scanConfirm:$('scanConfirm'), scanConfirmCode:$('scanConfirmCode'), scanConfirmOcr:$('scanConfirmOcr'), scanConfirmOk:$('scanConfirmOk'), scanConfirmCancel:$('scanConfirmCancel'),
   manualBtn:$('manualBtn'), manualOverlay:$('manualOverlay'), manualInput:$('manualInput'), manualAdd:$('manualAdd'), manualCancel:$('manualCancel')
@@ -274,10 +274,6 @@ el.exportBtn.addEventListener('click',async ()=>{
 });
 
 /* ---------- skenování čárového kódu ---------- */
-// Jen formáty skutečně používané na EAN/UPC visačkách zboží. Čím víc formátů
-// (CODE_128, CODE_39…) je povoleno zároveň, tím vyšší riziko, že dekodér
-// špatně přečte stejné čáry jiným formátem a vrátí nesmyslný výsledek.
-const SCAN_FORMATS = [9,10,14,15]; // EAN_13, EAN_8, UPC_A, UPC_E
 // Kontrolní číslice EAN-13/EAN-8/UPC-A/UPC-E (stejný mod-10 vzorec): poslední
 // číslice je kontrolní, zbylé číslice se zprava násobí střídavě 3,1,3,1…
 function isValidChecksum(code){
@@ -288,46 +284,21 @@ function isValidChecksum(code){
   for(let i=digits.length-1;i>=0;i--){ sum += digits[i]*w; w = (w===3)?1:3; }
   return ((10-(sum%10))%10) === check;
 }
-let scanner = null, scanCameras = [], scanCamIdx = 0, scanTorchOn = false, scanStarting = false;
+// Používáme ZXing (@zxing/browser), ne html5-qrcode: html5-qrcode při hledání
+// kódu kreslí snímek do plátna podle CSS rozměrů prvku na obrazovce
+// (clientWidth/clientHeight), ne podle skutečného rozlišení kamery – na
+// mobilu s object-fit:cover a jiným poměrem stran to vede k tomu, že se
+// prohledává jiný výřez, než jaký je vidět, a kód se nikdy nepřečte. ZXing
+// kreslí vždy z přímého rozlišení videa (video.videoWidth/videoHeight), takže
+// tenhle problém nemá.
+let zxingReader = null, zxingControls = null, scanCameras = [], scanCamIdx = 0, scanTorchOn = false, scanStarting = false;
 const hasCameraApi = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 function scanErrorMsg(err){
-  const s = String((err && (err.message||err))||'');
+  const s = String((err && (err.name||'')+' '+(err.message||err))||'');
   if(/NotAllowedError|Permission denied|dismissed/i.test(s)) return 'Přístup ke kameře byl zamítnut. Povolte kameru v nastavení prohlížeče a zkuste to znovu.';
   if(/NotFoundError/i.test(s)) return 'Na tomto zařízení nebyla nalezena žádná kamera.';
   if(/NotReadableError/i.test(s)) return 'Kameru se nepodařilo spustit, protože ji používá jiná aplikace.';
   return 'Kameru se nepodařilo spustit. Kód můžete zadat i ručně.';
-}
-let scanWatchdogTimer = null, scanAutoRetried = false;
-function clearScanWatchdog(){ if(scanWatchdogTimer){ clearTimeout(scanWatchdogTimer); scanWatchdogTimer = null; } }
-// Na některých telefonech (hlavně iPhone/Safari) se umí stát, že start() skeneru
-// doběhne bez chyby, ale samotné video se nikdy nerozjede – uživatel pak vidí
-// jen černou obrazovku. Tahle hlídka to pozná (video nemá žádná data a je
-// pořád na pauze) a zkusí to sama opravit: nejdřív ručním play(), a když to
-// nepomůže, kompletním restartem skeneru s jednoduššími požadavky na kameru.
-function startScanWatchdog(){
-  clearScanWatchdog();
-  scanWatchdogTimer = setTimeout(async ()=>{
-    if(el.scanner.hidden || !scanner) return;
-    const v = el.scannerView.querySelector('video');
-    const stuck = !v || (v.readyState===0 && v.paused);
-    if(!stuck) return;
-    try{ if(v) await v.play(); }catch(e){}
-    scanWatchdogTimer = setTimeout(async ()=>{
-      if(el.scanner.hidden || !scanner) return;
-      const v2 = el.scannerView.querySelector('video');
-      const stillStuck = !v2 || (v2.readyState===0 && v2.paused);
-      if(!stillStuck) return;
-      if(scanAutoRetried){
-        el.scannerMsg.textContent = 'Obraz z kamery se nepodařilo spustit. Zkuste skener zavřít a otevřít znovu, případně telefon restartovat.';
-        return;
-      }
-      scanAutoRetried = true;
-      try{ if(scanner.isScanning) await scanner.stop(); }catch(e){}
-      try{ scanner.clear(); }catch(e){}
-      scanner = null;
-      await startScanner();
-    },1500);
-  },1500);
 }
 async function startScanner(){
   if(scanStarting) return;
@@ -336,36 +307,29 @@ async function startScanner(){
   el.scannerTorch.hidden = true; el.scannerSwitch.hidden = true;
   el.scannerMsg.textContent = 'Spouštím kameru…';
   try{
-    if(!window.Html5Qrcode) throw new Error('Knihovna pro skenování se nenačetla. Zkontrolujte připojení k internetu.');
-    if(!scanner) scanner = new Html5Qrcode('scannerView',{formatsToSupport:SCAN_FORMATS,verbose:false});
-    // Dokud neznáme seznam kamer (popisky kamer bývají před udělením oprávnění
-    // nespolehlivé/prázdné), žádáme rovnou o zadní kameru přes facingMode –
-    // to funguje spolehlivě i bez enumerace zařízení.
-    const target = scanCameras.length ? {deviceId:{exact:scanCameras[scanCamIdx % scanCameras.length].id}} : {facingMode:{ideal:'environment'}};
-    // Bez "advanced" omezení (focusMode apod.) – na iPhonu/Safari umí takové
-    // pokročilé požadavky způsobit, že se video tváří jako spuštěné, ale
-    // žádný snímek se nikdy nenačte (černá obrazovka).
-    const videoConstraints = Object.assign({width:{ideal:1280},height:{ideal:720}},target);
-    try{
-      // Záměrně BEZ "qrbox" – omezení skenované oblasti na výřez odpovídající
-      // zobrazenému rámečku má v html5-qrcode na mobilech s object-fit:cover
-      // známý bug (přepočet souřadnic rámečku na skutečné rozlišení videa
-      // neodpovídá realitě), takže se kód uvnitř viditelného rámečku nikdy
-      // nepřečte. Bez "qrbox" se prohledává celý snímek, rámeček na obrazovce
-      // je jen vizuální vodítko (viz .scan-guide v CSS/HTML).
-      await scanner.start(target,{fps:10,videoConstraints},onScanSuccess,()=>{});
-    }catch(e){
-      await scanner.start(target,{fps:10},onScanSuccess,()=>{});
+    if(!window.ZXingBrowser) throw new Error('Knihovna pro skenování se nenačetla. Zkontrolujte připojení k internetu.');
+    if(!zxingReader){
+      zxingReader = new ZXingBrowser.BrowserMultiFormatReader(null,{delayBetweenScanAttempts:120,delayBetweenScanSuccess:400,tryPlayVideoTimeout:8000});
+      // Jen formáty skutečně používané na EAN/UPC visačkách zboží – čím víc
+      // formátů zároveň, tím vyšší riziko, že dekodér špatně přečte stejné
+      // čáry jiným formátem a vrátí nesmyslný výsledek.
+      zxingReader.possibleFormats = [ZXingBrowser.BarcodeFormat.EAN_13, ZXingBrowser.BarcodeFormat.EAN_8, ZXingBrowser.BarcodeFormat.UPC_A, ZXingBrowser.BarcodeFormat.UPC_E];
     }
+    const videoConstraints = scanCameras.length
+      ? {deviceId:{exact:scanCameras[scanCamIdx % scanCameras.length].deviceId},width:{ideal:1920},height:{ideal:1080}}
+      : {facingMode:'environment',width:{ideal:1920},height:{ideal:1080}};
+    zxingControls = await zxingReader.decodeFromConstraints({video:videoConstraints,audio:false}, el.scannerVideo, (result,err)=>{
+      if(result) onScanSuccess(result.getText());
+    });
     // Teď, když kamera běží (oprávnění je udělené), zjistíme seznam kamer pro
     // tlačítko přepínání a seřadíme scanCamIdx podle té, která je skutečně aktivní.
     if(!scanCameras.length){
       try{
-        scanCameras = await Html5Qrcode.getCameras()||[];
+        scanCameras = await zxingReader.listVideoInputDevices()||[];
         if(scanCameras.length){
           let curId = '';
-          try{ curId = (scanner.getRunningTrackSettings()||{}).deviceId||''; }catch(e){}
-          let idx = curId ? scanCameras.findIndex(c=>c.id===curId) : -1;
+          try{ curId = (zxingControls.streamVideoSettingsGet(()=>true)||{}).deviceId||''; }catch(e){}
+          let idx = curId ? scanCameras.findIndex(c=>c.deviceId===curId) : -1;
           if(idx<0) idx = scanCameras.findIndex(c=>/back|rear|environment|world/i.test(c.label||''));
           scanCamIdx = idx>=0 ? idx : 0;
         }
@@ -373,33 +337,23 @@ async function startScanner(){
     }
     el.scannerMsg.textContent = 'Namiřte kameru na čárový kód (cca 10–15 cm od kódu, zarovnejte rovně)';
     el.scannerSwitch.hidden = scanCameras.length<2;
-    try{ const caps = scanner.getRunningTrackCapabilities(); el.scannerTorch.hidden = !(caps && caps.torch); }
-    catch(e){ el.scannerTorch.hidden = true; }
-    startScanWatchdog();
+    el.scannerTorch.hidden = !zxingControls.switchTorch;
   }catch(err){
     el.scannerMsg.textContent = scanErrorMsg(err);
-    // Když spuštění selže, instance skeneru může zůstat v nekonzistentním
-    // stavu a další pokusy by selhávaly pořád dokola i když je s kamerou
-    // vše v pořádku. Zahodíme ji, ať se při dalším pokusu vytvoří znovu od nuly.
-    try{ if(scanner && scanner.isScanning) await scanner.stop(); }catch(e){}
-    try{ if(scanner) scanner.clear(); }catch(e){}
-    scanner = null;
+    try{ if(zxingControls) zxingControls.stop(); }catch(e){}
+    zxingControls = null;
     scanCameras = []; scanCamIdx = 0;
   }finally{
     scanStarting = false;
   }
 }
 async function stopScanner(){
-  clearScanWatchdog();
-  scanAutoRetried = false;
   el.scanner.hidden = true;
   scanTorchOn = false; el.scannerTorch.setAttribute('aria-pressed','false');
   el.scanConfirm.hidden = true; pendingCode = null;
   setOcrStatus('','');
-  if(scanner){
-    try{ if(scanner.isScanning) await scanner.stop(); }catch(e){}
-    try{ scanner.clear(); }catch(e){}
-  }
+  try{ if(zxingControls) zxingControls.stop(); }catch(e){}
+  zxingControls = null;
 }
 let pendingCode = null;
 function onScanSuccess(text){
@@ -410,7 +364,8 @@ function onScanSuccess(text){
   // číslici – když nesedí, čtení potichu zahodíme a necháme skener běžet dál.
   if(!isValidChecksum(code)) return;
   pendingCode = code;
-  try{ if(scanner && scanner.isScanning) scanner.pause(true); }catch(e){}
+  // ZXing nemá "pause" – skenování na pozadí dál běží, ale dokud je
+  // pendingCode nastavený, výsledky se ignorují (viz podmínka výše).
   el.scanConfirmCode.textContent = code;
   setOcrStatus('','Ověřuji číslice pod kódem…');
   el.scanConfirm.hidden = false;
@@ -422,7 +377,6 @@ function resumeAfterConfirm(){
   el.scanConfirm.hidden = true;
   pendingCode = null;
   setOcrStatus('','');
-  try{ if(scanner) scanner.resume(); }catch(e){}
   el.scannerMsg.textContent = 'Namiřte kameru na čárový kód (cca 10–15 cm od kódu, zarovnejte rovně)';
 }
 
@@ -445,7 +399,7 @@ function getOcrWorker(){
   return ocrWorkerPromise;
 }
 async function ocrDigitsFromVideo(){
-  const video = el.scannerView.querySelector('video');
+  const video = el.scannerVideo;
   if(!video || !video.videoWidth) return null;
   const canvas = document.createElement('canvas');
   const scale = Math.min(1, 1000/video.videoWidth);
@@ -487,13 +441,14 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !el.scanner.hidd
 el.scannerSwitch.addEventListener('click',async ()=>{
   if(scanCameras.length<2) return;
   scanCamIdx = (scanCamIdx+1)%scanCameras.length;
-  try{ if(scanner && scanner.isScanning) await scanner.stop(); }catch(e){}
+  try{ if(zxingControls) zxingControls.stop(); }catch(e){}
+  zxingControls = null;
   await startScanner();
 });
 el.scannerTorch.addEventListener('click',async ()=>{
-  if(!scanner) return;
+  if(!zxingControls || !zxingControls.switchTorch) return;
   const next = !scanTorchOn;
-  try{ await scanner.applyVideoConstraints({advanced:[{torch:next}]}); scanTorchOn = next; el.scannerTorch.setAttribute('aria-pressed',String(next)); }
+  try{ await zxingControls.switchTorch(next); scanTorchOn = next; el.scannerTorch.setAttribute('aria-pressed',String(next)); }
   catch(e){}
 });
 window.addEventListener('load',()=>{ if(!hasCameraApi()) el.scanBtn.disabled = true; });
