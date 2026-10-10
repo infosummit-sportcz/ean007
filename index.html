@@ -83,8 +83,16 @@ li.row button.del:active{background:var(--line-soft)}
 .scanner-iconbtn[aria-pressed="true"]{background:#EAF2F6;color:#0A1216;border-color:#EAF2F6}
 .scanner-iconbtn[hidden]{display:none}
 .scanner-iconbtn svg{width:22px;height:22px}
-.scanner-view{flex:1;min-height:0;position:relative;overflow:hidden}
+.scanner-stage{flex:1;min-height:0;position:relative;overflow:hidden}
+.scanner-view{position:absolute;inset:0}
 .scanner-view video{width:100%;height:100%;object-fit:cover}
+.scan-guide{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.scan-guide-box{position:relative;width:82%;max-width:520px;height:26%;max-height:160px}
+.scan-guide-box i{position:absolute;width:26px;height:26px;border:3px solid #fff;opacity:.85}
+.scan-guide-box i:nth-child(1){top:0;left:0;border-right:none;border-bottom:none}
+.scan-guide-box i:nth-child(2){top:0;right:0;border-left:none;border-bottom:none}
+.scan-guide-box i:nth-child(3){bottom:0;left:0;border-right:none;border-top:none}
+.scan-guide-box i:nth-child(4){bottom:0;right:0;border-left:none;border-top:none}
 .scanner-msg{margin:0;padding:14px 16px calc(env(safe-area-inset-bottom,0px) + 22px);text-align:center;color:#EAF2F6;font-size:.98rem;min-height:1.4em}
 .scan-confirm{padding:16px 16px calc(env(safe-area-inset-bottom,0px) + 16px);background:#12222A;border-top:1px solid rgba(234,242,246,.15)}
 .scan-confirm[hidden]{display:none}
@@ -146,7 +154,10 @@ li.row button.del:active{background:var(--line-soft)}
       </button>
     </div>
   </div>
-  <div class="scanner-view" id="scannerView"></div>
+  <div class="scanner-stage">
+    <div class="scanner-view" id="scannerView"></div>
+    <div class="scan-guide" aria-hidden="true"><div class="scan-guide-box"><i></i><i></i><i></i><i></i></div></div>
+  </div>
   <div class="scan-confirm" id="scanConfirm" hidden>
     <p class="scan-confirm-code" id="scanConfirmCode"></p>
     <p class="scan-confirm-ocr" id="scanConfirmOcr" hidden></p>
@@ -279,11 +290,6 @@ function isValidChecksum(code){
 }
 let scanner = null, scanCameras = [], scanCamIdx = 0, scanTorchOn = false, scanStarting = false;
 const hasCameraApi = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-function qrboxFn(vw,vh){
-  const w = Math.round(Math.min(vw*0.8, Math.max(vh,vw)*0.85));
-  const h = Math.max(70,Math.round(Math.min(vh*0.22, w*0.3)));
-  return {width:Math.max(220,w),height:h};
-}
 function scanErrorMsg(err){
   const s = String((err && (err.message||err))||'');
   if(/NotAllowedError|Permission denied|dismissed/i.test(s)) return 'Přístup ke kameře byl zamítnut. Povolte kameru v nastavení prohlížeče a zkuste to znovu.';
@@ -341,9 +347,15 @@ async function startScanner(){
     // žádný snímek se nikdy nenačte (černá obrazovka).
     const videoConstraints = Object.assign({width:{ideal:1280},height:{ideal:720}},target);
     try{
-      await scanner.start(target,{fps:10,qrbox:qrboxFn,videoConstraints},onScanSuccess,()=>{});
+      // Záměrně BEZ "qrbox" – omezení skenované oblasti na výřez odpovídající
+      // zobrazenému rámečku má v html5-qrcode na mobilech s object-fit:cover
+      // známý bug (přepočet souřadnic rámečku na skutečné rozlišení videa
+      // neodpovídá realitě), takže se kód uvnitř viditelného rámečku nikdy
+      // nepřečte. Bez "qrbox" se prohledává celý snímek, rámeček na obrazovce
+      // je jen vizuální vodítko (viz .scan-guide v CSS/HTML).
+      await scanner.start(target,{fps:10,videoConstraints},onScanSuccess,()=>{});
     }catch(e){
-      await scanner.start(target,{fps:10,qrbox:qrboxFn},onScanSuccess,()=>{});
+      await scanner.start(target,{fps:10},onScanSuccess,()=>{});
     }
     // Teď, když kamera běží (oprávnění je udělené), zjistíme seznam kamer pro
     // tlačítko přepínání a seřadíme scanCamIdx podle té, která je skutečně aktivní.
