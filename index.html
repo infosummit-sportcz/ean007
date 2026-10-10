@@ -300,6 +300,18 @@ function scanErrorMsg(err){
   if(/NotReadableError/i.test(s)) return 'Kameru se nepodařilo spustit, protože ji používá jiná aplikace.';
   return 'Kameru se nepodařilo spustit. Kód můžete zadat i ručně.';
 }
+let scanAttempts = 0, scanLastErr = '', scanLastRaw = '', scanDebugTimer = null;
+// DOČASNÁ DIAGNOSTIKA – zobrazí, jestli dekodér vůbec něco zkouší přečíst
+// (počet pokusů) a jaký typ chyby/výsledku naposledy dostal, abychom poznali,
+// jestli skenování vůbec běží, nebo proč se zastavilo.
+function startScanDebugTicker(){
+  stopScanDebugTicker();
+  scanDebugTimer = setInterval(()=>{
+    if(el.scanner.hidden || pendingCode) return;
+    el.scannerMsg.textContent = 'Namiřte kameru na čárový kód (cca 10–15 cm od kódu, zarovnejte rovně) [diag: pokusů='+scanAttempts+' poslední='+(scanLastErr||'–')+(scanLastRaw?' přečteno="'+scanLastRaw+'"':'')+']';
+  },1000);
+}
+function stopScanDebugTicker(){ if(scanDebugTimer){ clearInterval(scanDebugTimer); scanDebugTimer = null; } }
 async function startScanner(){
   if(scanStarting) return;
   scanStarting = true;
@@ -321,9 +333,17 @@ async function startScanner(){
     const videoConstraints = scanCameras.length
       ? {deviceId:{exact:scanCameras[scanCamIdx % scanCameras.length].deviceId},width:{ideal:1920},height:{ideal:1080}}
       : {facingMode:'environment',width:{ideal:1920},height:{ideal:1080}};
+    scanAttempts = 0; scanLastErr = ''; scanLastRaw = '';
     zxingControls = await zxingReader.decodeFromConstraints({video:videoConstraints,audio:false}, el.scannerVideo, (result,err)=>{
-      if(result) onScanSuccess(result.getText());
+      scanAttempts++;
+      if(result){
+        scanLastRaw = result.getText();
+        onScanSuccess(scanLastRaw);
+      }else if(err){
+        scanLastErr = (err.constructor && err.constructor.name) || String(err);
+      }
     });
+    startScanDebugTicker();
     // Teď, když kamera běží (oprávnění je udělené), zjistíme seznam kamer pro
     // tlačítko přepínání a seřadíme scanCamIdx podle té, která je skutečně aktivní.
     if(!scanCameras.length){
@@ -354,6 +374,7 @@ async function startScanner(){
   }
 }
 async function stopScanner(){
+  stopScanDebugTicker();
   el.scanner.hidden = true;
   scanTorchOn = false; el.scannerTorch.setAttribute('aria-pressed','false');
   el.scanConfirm.hidden = true; pendingCode = null;
