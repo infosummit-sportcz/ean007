@@ -93,6 +93,8 @@ li.row button.del:active{background:var(--line-soft)}
 .scan-guide-box i:nth-child(2){top:0;right:0;border-left:none;border-bottom:none}
 .scan-guide-box i:nth-child(3){bottom:0;left:0;border-right:none;border-top:none}
 .scan-guide-box i:nth-child(4){bottom:0;right:0;border-left:none;border-top:none}
+.scan-debug{position:absolute;left:8px;bottom:8px;width:46%;max-width:220px;border:2px solid #0f0;background:#000;z-index:5;display:block}
+.scan-debug-label{position:absolute;left:8px;bottom:8px;transform:translateY(-100%);color:#0f0;font-size:.7rem;background:rgba(0,0,0,.6);padding:1px 4px;border-radius:3px;z-index:5}
 .scanner-msg{margin:0;padding:14px 16px calc(env(safe-area-inset-bottom,0px) + 22px);text-align:center;color:#EAF2F6;font-size:.98rem;min-height:1.4em}
 .scan-confirm{padding:16px 16px calc(env(safe-area-inset-bottom,0px) + 16px);background:#12222A;border-top:1px solid rgba(234,242,246,.15)}
 .scan-confirm[hidden]{display:none}
@@ -157,6 +159,8 @@ li.row button.del:active{background:var(--line-soft)}
   <div class="scanner-stage">
     <div class="scanner-view" id="scannerView"><video id="scannerVideo" playsinline muted></video></div>
     <div class="scan-guide" aria-hidden="true"><div class="scan-guide-box"><i></i><i></i><i></i><i></i></div></div>
+    <div class="scan-debug-label" id="scanDebugLabel" hidden></div>
+    <canvas class="scan-debug" id="scanDebugCanvas" hidden></canvas>
   </div>
   <div class="scan-confirm" id="scanConfirm" hidden>
     <p class="scan-confirm-code" id="scanConfirmCode"></p>
@@ -187,6 +191,7 @@ const el = {
   rows:$('rows'), empty:$('empty'), countNum:$('countNum'), countLabel:$('countLabel'), notice:$('notice'),
   clearBtn:$('clearBtn'), exportBtn:$('exportBtn'), scanBtn:$('scanBtn'),
   scanner:$('scanner'), scannerView:$('scannerView'), scannerVideo:$('scannerVideo'), scannerMsg:$('scannerMsg'),
+  scanDebugCanvas:$('scanDebugCanvas'), scanDebugLabel:$('scanDebugLabel'),
   scannerClose:$('scannerClose'), scannerSwitch:$('scannerSwitch'), scannerTorch:$('scannerTorch'),
   scanConfirm:$('scanConfirm'), scanConfirmCode:$('scanConfirmCode'), scanConfirmOcr:$('scanConfirmOcr'), scanConfirmOk:$('scanConfirmOk'), scanConfirmCancel:$('scanConfirmCancel'),
   manualBtn:$('manualBtn'), manualOverlay:$('manualOverlay'), manualInput:$('manualInput'), manualAdd:$('manualAdd'), manualCancel:$('manualCancel')
@@ -306,12 +311,32 @@ let scanAttempts = 0, scanLastErr = '', scanLastRaw = '', scanDebugTimer = null;
 // jestli skenování vůbec běží, nebo proč se zastavilo.
 function startScanDebugTicker(){
   stopScanDebugTicker();
+  el.scanDebugCanvas.hidden = false;
+  el.scanDebugLabel.hidden = false;
+  const ctx = el.scanDebugCanvas.getContext('2d');
   scanDebugTimer = setInterval(()=>{
-    if(el.scanner.hidden || pendingCode) return;
-    el.scannerMsg.textContent = 'Namiřte kameru na čárový kód (cca 10–15 cm od kódu, zarovnejte rovně) [diag: pokusů='+scanAttempts+' poslední='+(scanLastErr||'–')+(scanLastRaw?' přečteno="'+scanLastRaw+'"':'')+']';
-  },1000);
+    if(el.scanner.hidden) return;
+    if(!pendingCode){
+      el.scannerMsg.textContent = 'Namiřte kameru na čárový kód (cca 10–15 cm od kódu, zarovnejte rovně) [diag: pokusů='+scanAttempts+' poslední='+(scanLastErr||'–')+(scanLastRaw?' přečteno="'+scanLastRaw+'"':'')+']';
+    }
+    // Zelený rámeček dole = přesně to, co vidí dekodér (přímo z nativního
+    // rozlišení videa, ne z toho, jak je kamera zobrazená na displeji) –
+    // takhle poznáme, jestli snímek není otočený/oříznutý jinak, než
+    // čekáme.
+    const v = el.scannerVideo;
+    if(v && v.videoWidth){
+      el.scanDebugCanvas.width = v.videoWidth;
+      el.scanDebugCanvas.height = v.videoHeight;
+      ctx.drawImage(v,0,0);
+      el.scanDebugLabel.textContent = v.videoWidth+'×'+v.videoHeight;
+    }
+  },700);
 }
-function stopScanDebugTicker(){ if(scanDebugTimer){ clearInterval(scanDebugTimer); scanDebugTimer = null; } }
+function stopScanDebugTicker(){
+  if(scanDebugTimer){ clearInterval(scanDebugTimer); scanDebugTimer = null; }
+  el.scanDebugCanvas.hidden = true;
+  el.scanDebugLabel.hidden = true;
+}
 async function startScanner(){
   if(scanStarting) return;
   scanStarting = true;
