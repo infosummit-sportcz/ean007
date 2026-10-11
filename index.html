@@ -292,6 +292,21 @@ function isValidChecksum(code){
 // kreslí vždy z přímého rozlišení videa (video.videoWidth/videoHeight), takže
 // tenhle problém nemá.
 let zxingReader = null, zxingControls = null, scanCameras = [], scanCamIdx = 0, scanTorchOn = false, scanStarting = false;
+let scanDiagTimer = null, scanBaseMsg = '';
+function setScanMsg(text){
+  scanBaseMsg = text;
+  el.scannerMsg.textContent = text;
+}
+function startScanDiagTicker(){
+  stopScanDiagTicker();
+  scanDiagTimer = setInterval(()=>{
+    if(pendingCode) return; // nepřekrývat potvrzovací hlášku
+    el.scannerMsg.textContent = scanBaseMsg + '  [pokusů: ' + scanAttempts + ']';
+  }, 500);
+}
+function stopScanDiagTicker(){
+  if(scanDiagTimer){ clearInterval(scanDiagTimer); scanDiagTimer = null; }
+}
 const hasCameraApi = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 function scanErrorMsg(err){
   const s = String((err && (err.name||'')+' '+(err.message||err))||'');
@@ -306,7 +321,8 @@ async function startScanner(){
   scanStarting = true;
   el.scanner.hidden = false;
   el.scannerTorch.hidden = true; el.scannerSwitch.hidden = true;
-  el.scannerMsg.textContent = 'Spouštím kameru…';
+  stopScanDiagTicker();
+  setScanMsg('Spouštím kameru…');
   try{
     if(!window.ZXingBrowser) throw new Error('Knihovna pro skenování se nenačetla. Zkontrolujte připojení k internetu.');
     if(!zxingReader){
@@ -318,6 +334,10 @@ async function startScanner(){
       // formátů zároveň, tím vyšší riziko, že dekodér špatně přečte stejné
       // čáry jiným formátem a vrátí nesmyslný výsledek.
       zxingReader.possibleFormats = [ZXingBrowser.BarcodeFormat.EAN_13, ZXingBrowser.BarcodeFormat.EAN_8, ZXingBrowser.BarcodeFormat.UPC_A, ZXingBrowser.BarcodeFormat.UPC_E];
+      // TRY_HARDER: dekodér stráví víc času hledáním kódu (víc úhlů/řádků
+      // skenování), což výrazně pomáhá u menších/nakřivo držených kódů
+      // na živém videu z mobilu – cena je jen o něco pomalejší pokus.
+      zxingReader.hints.set(ZXingBrowser.DecodeHintType.TRY_HARDER, true);
     }
     const videoConstraints = scanCameras.length
       ? {deviceId:{exact:scanCameras[scanCamIdx % scanCameras.length].deviceId},width:{ideal:1920},height:{ideal:1080}}
@@ -341,14 +361,16 @@ async function startScanner(){
         }
       }catch(e){}
     }
-    el.scannerMsg.textContent = 'Namiřte kameru na čárový kód (cca 10–15 cm od kódu, zarovnejte rovně)';
+    setScanMsg('Namiřte kameru na čárový kód (cca 10–15 cm od kódu, zarovnejte rovně)');
+    startScanDiagTicker();
     el.scannerSwitch.hidden = scanCameras.length<2;
     el.scannerTorch.hidden = !zxingControls.switchTorch;
   }catch(err){
     // DOČASNÁ DIAGNOSTIKA – dokud ladíme, přidáme za hlášku i skutečnou
     // technickou chybu z prohlížeče/knihovny.
     const rawErr = String((err && (err.name?err.name+': ':'')+(err.message||err))||err);
-    el.scannerMsg.textContent = scanErrorMsg(err)+' ['+rawErr+']';
+    setScanMsg(scanErrorMsg(err)+' ['+rawErr+']');
+    stopScanDiagTicker();
     try{ if(zxingControls) zxingControls.stop(); }catch(e){}
     zxingControls = null;
     scanCameras = []; scanCamIdx = 0;
@@ -361,6 +383,7 @@ async function stopScanner(){
   scanTorchOn = false; el.scannerTorch.setAttribute('aria-pressed','false');
   el.scanConfirm.hidden = true; pendingCode = null;
   setOcrStatus('','');
+  stopScanDiagTicker();
   try{ if(zxingControls) zxingControls.stop(); }catch(e){}
   zxingControls = null;
 }
@@ -378,7 +401,7 @@ function onScanSuccess(text){
   el.scanConfirmCode.textContent = code;
   setOcrStatus('','Ověřuji číslice pod kódem…');
   el.scanConfirm.hidden = false;
-  el.scannerMsg.textContent = 'Potvrďte přidání kódu';
+  setScanMsg('Potvrďte přidání kódu');
   if(navigator.vibrate) try{ navigator.vibrate(60); }catch(e){}
   runOcrCheck(code);
 }
@@ -386,7 +409,7 @@ function resumeAfterConfirm(){
   el.scanConfirm.hidden = true;
   pendingCode = null;
   setOcrStatus('','');
-  el.scannerMsg.textContent = 'Namiřte kameru na čárový kód (cca 10–15 cm od kódu, zarovnejte rovně)';
+  setScanMsg('Namiřte kameru na čárový kód (cca 10–15 cm od kódu, zarovnejte rovně)');
 }
 
 /* ---------- OCR kontrola číslic pod čárovým kódem ---------- */
