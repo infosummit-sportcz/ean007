@@ -337,7 +337,10 @@ async function startScanner(){
       // TRY_HARDER: dekodér stráví víc času hledáním kódu (víc úhlů/řádků
       // skenování), což výrazně pomáhá u menších/nakřivo držených kódů
       // na živém videu z mobilu – cena je jen o něco pomalejší pokus.
-      zxingReader.hints.set(ZXingBrowser.DecodeHintType.TRY_HARDER, true);
+      // Pozor: balíček ZXingBrowser neexportuje DecodeHintType (jen
+      // BarcodeFormat), proto se musí použít přímo číselná hodnota 3,
+      // ověřená proti zdrojovému kódu knihovny (DecodeHintType.TRY_HARDER = 3).
+      zxingReader.hints.set(3 /* DecodeHintType.TRY_HARDER */, true);
     }
     const videoConstraints = scanCameras.length
       ? {deviceId:{exact:scanCameras[scanCamIdx % scanCameras.length].deviceId},width:{ideal:1920},height:{ideal:1080}}
